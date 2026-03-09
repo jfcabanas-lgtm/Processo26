@@ -17,8 +17,8 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
-    # Limpeza básica de espaços duplos para melhorar o regex
-    texto_limpo = " ".join(texto.split())
+    # Limpeza para facilitar o Regex
+    texto_processado = " ".join(texto.split())
 
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
@@ -30,20 +30,32 @@ def extrair_dados_pdf(file):
         "sei_verificador": re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE).group(1) if re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE) else ""
     }
 
-    # Data do despacho (item 1)
+    # Data do despacho para o Item 1
     datas_gerais = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
     dados["data_despacho"] = datas_gerais[0] if datas_gerais else datetime.now().strftime('%d/%m/%Y')
 
-    # --- LÓGICA DE EXTRAÇÃO DE VALIDADES (ITENS 3, 4 e 5) ---
-    # Busca datas que venham após os termos "Válida até" ou "Validade"
-    # O regex busca: termo chave + caracteres opcionais + data no formato DD/MM/AAAA
-    padrao_validade = r"(?:Válida até|Validade|Valida ate|Valido ate)[:\s]*(\d{2}/\d{2}/\d{4})"
-    validades_encontradas = re.findall(padrao_validade, texto, re.IGNORECASE)
+    # --- LÓGICA DE EXTRAÇÃO DE VALIDADES MELHORADA ---
+    
+    # Padrão para capturar data após palavras-chave (Federal e Trabalhista)
+    def buscar_validade(pattern, text):
+        match = re.search(pattern, text, re.IGNORECASE)
+        return match.group(1) if match else "Verificar no PDF"
 
-    # Atribuição conforme a ordem de aparição comum nos processos do IPEM
-    dados["val_federal"] = validades_encontradas[0] if len(validades_encontradas) > 0 else "Verificar no PDF"
-    dados["val_fgts"] = validades_encontradas[1] if len(validades_encontradas) > 1 else "Verificar no PDF"
-    dados["val_trabalhista"] = validades_encontradas[2] if len(validades_encontradas) > 2 else "Verificar no PDF"
+    # Padrão para capturar período (comum no CRF/FGTS: "DD/MM/AAAA a DD/MM/AAAA")
+    def buscar_periodo(text):
+        match = re.search(r"(\d{2}/\d{2}/\d{4}\s*a\s*\d{2}/d{2}/\d{4})", text, re.IGNORECASE)
+        if not match:
+            # Se não achar período, busca a data isolada após "Válida até"
+            match = re.search(r"(?:Válida até|Validade|Vigência)[:\s]*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+        return match.group(1) if match else "Verificar no PDF"
+
+    # Tentativa de localizar blocos de texto específicos para cada certidão (Federal, FGTS, CNDT)
+    # Nota: Em PDFs complexos, a ordem de aparição no texto extraído costuma seguir a ordem das páginas.
+    validades_lista = re.findall(r"(?:Válida até|Validade|Vigência)[:\s]*(\d{2}/\d{2}/\d{4}(?:\s*a\s*\d{2}/\d{2}/\d{4})?)", texto, re.IGNORECASE)
+
+    dados["val_federal"] = validades_lista[0] if len(validades_lista) > 0 else "Verificar"
+    dados["val_fgts"] = validades_lista[1] if len(validades_lista) > 1 else "Verificar"
+    dados["val_trabalhista"] = validades_lista[2] if len(validades_lista) > 2 else "Verificar"
 
     # Gestor e Fornecedor
     re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
@@ -59,7 +71,6 @@ def gerar_excel_oficial(dados_p, df_c):
     wb = Workbook()
     ws = wb.active
     ws.title = "Checklist Auditoria"
-    
     bold_f = Font(bold=True)
     border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     center = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -86,10 +97,10 @@ def gerar_excel_oficial(dados_p, df_c):
         cell.font = bold_f; cell.border = border; cell.alignment = center
 
     for r_idx, row in df_c.iterrows():
-        ws.cell(row=r_idx+10, column=1, value=row['ITEM']).border = border
-        ws.cell(row=r_idx+10, column=2, value=row['EVENTO']).border = border
-        ws.cell(row=r_idx+10, column=3, value=row['S/N/NA']).border = border
-        ws.cell(row=r_idx+10, column=4, value=row['OBSERVAÇÕES']).border = border
+        for c_idx, col_name in enumerate(["ITEM", "EVENTO", "S/N/NA", "OBSERVAÇÕES"], start=1):
+            cell = ws.cell(row=r_idx+10, column=c_idx, value=row[col_name])
+            cell.border = border
+            if c_idx != 2: cell.alignment = center
 
     wb.save(output)
     return output.getvalue()
@@ -102,7 +113,6 @@ uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf
 
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
-    
     obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_despacho']})"
     obs_sei = f"Documento SEI {d['sei_verificador']}"
     
@@ -140,4 +150,4 @@ if uploaded_file:
         use_container_width=True
     )
 else:
-    st.warning("Submeta o PDF para extrair as validades específicas das certidões.")
+    st.warning("Submeta o PDF para analisar as certidões e validades.")
