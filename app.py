@@ -11,46 +11,51 @@ from openpyxl.styles import Font, Alignment, Border, Side
 st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
 
 def extrair_dados_pdf(file):
-    texto_paginas = []
+    texto_completo = ""
     reader = PyPDF2.PdfReader(file)
     for page in reader.pages:
         content = page.extract_text()
-        if content: texto_paginas.append(content)
+        if content: texto_completo += content
     
-    texto_completo = "\n".join(texto_paginas)
-    # Remove espaços duplos mas mantém quebras de linha para análise de vizinhança
-    texto_linear = " ".join(texto_completo.split())
+    # Normalização para busca linear
+    texto_limpo = " ".join(texto_completo.split())
 
-    # --- EXTRAÇÃO DE DADOS MESTRE ---
+    # --- CORREÇÃO ITEM 1: DATA DA NL ---
+    # Busca a data especificamente associada ao termo "Nota de Liquidação" ou "NL"
+    # O padrão procura o número 2026NLXXXXX e a data de 10 caracteres logo após
+    match_nl = re.search(r"Nota\s+de\s+Liquidação\s+(\d{4}NL\d{5})\s+(\d{2}/\d{2}/\d{4})", texto_completo, re.IGNORECASE)
     
-    # 1. Identificar a NL e a DATA DA NL (Item 1)
-    # Procura o padrão 2026NLXXXXX e tenta pegar a data de 10 caracteres (DD/MM/AAAA) que vem logo após
-    match_nl = re.search(r"(202\dNL\d{5})\s*.*?(\d{2}/\d{2}/\d{4})", texto_linear)
-    id_nl = match_nl.group(1) if match_nl else "2026NLXXXXX"
-    data_nl = match_nl.group(2) if match_nl else "Data não encontrada"
+    if match_nl:
+        id_nl = match_nl.group(1)
+        data_emissao_nl = match_nl.group(2)
+    else:
+        # Fallback caso o PDF use o formato abreviado (NL)
+        match_nl_alt = re.search(r"(202\dNL\d{5})\s+(\d{2}/\d{2}/\d{4})", texto_limpo)
+        id_nl = match_nl_alt.group(1) if match_nl_alt else "2026NLXXXXX"
+        data_emissao_nl = match_nl_alt.group(2) if match_nl_alt else "Verificar no PDF"
 
-    # 2. Identificar o Número SEI para as Certidões (Itens 3, 4 e 5)
-    # Busca especificamente o número do documento que o SEI gera na lateral ou rodapé (8 a 10 dígitos)
-    # Prioriza o padrão "Documento SEI [número]"
-    match_sei = re.search(r"(?:Documento\s*SEI|nº|Verificador)\s*(\d{8,10})", texto_linear, re.IGNORECASE)
-    id_sei = match_sei.group(1) if match_sei else "Verificar SEI"
+    # --- CORREÇÃO ITENS 3, 4 e 5: NÚMERO SEI ---
+    # Busca o número verificador (9 a 10 dígitos) que aparece nos rodapés ou cabeçalhos SEI
+    # Prioriza o número que aparece após "Documento SEI"
+    busca_sei = re.search(r"Documento\s+SEI\s+(\d{8,10})", texto_completo, re.IGNORECASE)
+    id_sei = busca_sei.group(1) if busca_sei else "Consultar SEI"
 
     dados = {
-        "processo": re.search(r"SEI-\d{6}/\d{6}/202\d", texto_linear).group(0) if re.search(r"SEI-\d{6}/\d{6}/202\d", texto_linear) else "Não encontrado",
-        "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto_linear).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto_linear) else "Não encontrado",
-        "contrato": re.search(r"(?:99\d{8}|2100\d{4})", texto_linear).group(0) if re.search(r"(?:99\d{8}|2100\d{4})", texto_linear) else "Não encontrado",
-        "empenho": re.search(r"202\dNE\d{5}", texto_linear).group(0) if re.search(r"202\dNE\d{5}", texto_linear) else "2026NEXXXXX",
+        "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo) else "Não encontrado",
+        "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto_completo).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto_completo) else "Não encontrado",
+        "contrato": re.search(r"(?:99\d{8}|2100\d{4})", texto_completo).group(0) if re.search(r"(?:99\d{8}|2100\d{4})", texto_completo) else "Não encontrado",
+        "empenho": re.search(r"202\dNE\d{5}", texto_completo).group(0) if re.search(r"202\dNE\d{5}", texto_completo) else "2026NEXXXXX",
         "liquidacao": id_nl,
-        "data_emissao_nl": data_nl,
-        "sei_doc": id_sei,
-        "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto_linear).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto_linear) else "R$ 0,00"
+        "data_nl": data_emissao_nl,
+        "sei_verificador": id_sei,
+        "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto_completo).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto_completo) else "R$ 0,00"
     }
 
     # Fornecedor e Gestor
-    re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:|Beneficiário)\s*([A-Z\s\d\/\.\-\&]{5,80})", texto_linear)
-    dados["fornecedor"] = re_forn.group(1).strip() if re_forn else "Não encontrado"
+    re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:|Beneficiário)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto_completo)
+    dados["fornecedor"] = re_forn.group(1).replace('\n', ' ').strip() if re_forn else "Não encontrado"
     
-    re_gestor = re.search(r"assinado eletronicamente por\s*([A-Za-z\s]+),", texto_linear)
+    re_gestor = re.search(r"assinado eletronicamente por\s*([A-Za-z\s]+),", texto_completo)
     dados["gestor"] = re_gestor.group(1).strip() if re_gestor else "Não identificado"
     
     return dados
@@ -67,8 +72,8 @@ def gerar_excel_oficial(dados_p, df_c):
     ws['A1'] = "INSTITUTO DE PESOS E MEDIDAS IPEM/RJ — AUDITORIA INTERNA - AUDIT"
     ws['A1'].font = Font(bold=True, size=11); ws['A1'].alignment = center
 
-    info = [("Processo SEI:", dados_p['processo']), ("Fornecedor:", dados_p['fornecedor']), ("Contrato:", dados_p['contrato']), ("CNPJ:", dados_p['cnpj']), ("Valor Bruto:", dados_p['valor_bruto']), ("Gestor:", dados_p['gestor'])]
-    for idx, (label, val) in enumerate(info, start=2):
+    info_header = [("Processo SEI:", dados_p['processo']), ("Fornecedor:", dados_p['fornecedor']), ("Contrato:", dados_p['contrato']), ("CNPJ:", dados_p['cnpj']), ("Valor Bruto:", dados_p['valor_bruto']), ("Gestor:", dados_p['gestor'])]
+    for idx, (label, val) in enumerate(info_header, start=2):
         ws.cell(row=idx, column=1, value=label).font = bold_f
         ws.cell(row=idx, column=2, value=val)
 
@@ -77,8 +82,8 @@ def gerar_excel_oficial(dados_p, df_c):
         cell.font = bold_f; cell.border = border; cell.alignment = center
 
     for r_idx, row in df_c.iterrows():
-        for c_idx, col in enumerate(["ITEM", "EVENTO", "S/N/NA", "OBSERVAÇÕES"], start=1):
-            cell = ws.cell(row=r_idx+10, column=c_idx, value=row[col])
+        for c_idx, col_name in enumerate(["ITEM", "EVENTO", "S/N/NA", "OBSERVAÇÕES"], start=1):
+            cell = ws.cell(row=r_idx+10, column=c_idx, value=row[col_name])
             cell.border = border
             if c_idx != 2: cell.alignment = center
 
@@ -93,16 +98,15 @@ uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    # Formatação exata das observações
-    obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_emissao_nl']})"
-    obs_sei = f"Documento SEI {d['sei_doc']}"
+    obs_item_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_nl']})"
+    obs_sei_geral = f"Documento SEI {d['sei_verificador']}"
     
-    checklist = [
-        {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_1},
-        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 4, "EVENTO": "Certidão de regularidade junto ao FGTS", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 5, "EVENTO": "Certidão de regularidade junto a Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
+    checklist_19 = [
+        {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_item_1},
+        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
+        {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
+        {"ITEM": 4, "EVENTO": "Certidão de regularidade junto ao FGTS", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
+        {"ITEM": 5, "EVENTO": "Certidão de regularidade junto a Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
         {"ITEM": 6, "EVENTO": "Certidão de Regularidade Estadual (ICMS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 7, "EVENTO": "Certidão de Regularidade Municipal (ISS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 8, "EVENTO": "Consulta ao CADIN Estadual", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
@@ -110,7 +114,7 @@ if uploaded_file:
         {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
         {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
         {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
-        {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
+        {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
         {"ITEM": 14, "EVENTO": "Relação dos funcionários que executaram o serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 16, "EVENTO": "Comprovante de pagamento do INSS", "S/N/NA": "S", "OBSERVAÇÕES": "Guia Paga"},
@@ -119,8 +123,7 @@ if uploaded_file:
         {"ITEM": 19, "EVENTO": "Comprovante bancário de salários", "S/N/NA": "S", "OBSERVAÇÕES": "Transferência"}
     ]
 
-    df = pd.DataFrame(checklist)
-    st.table(df)
+    st.table(pd.DataFrame(checklist_19))
     
-    excel = gerar_excel_oficial(d, df)
-    st.download_button(label="📥 GERAR CHECKLIST OFICIAL", data=excel, file_name=f"Checklist_{d['processo'].replace('/','_')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    excel_data = gerar_excel_oficial(d, pd.DataFrame(checklist_19))
+    st.download_button(label="📥 GERAR CHECKLIST OFICIAL", data=excel_data, file_name=f"Checklist_{d['processo'].replace('/','_')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
