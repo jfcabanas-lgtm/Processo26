@@ -7,6 +7,7 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
+# 1. Configurações de Layout
 st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
 
 def extrair_dados_pdf(file):
@@ -16,7 +17,7 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
-    # Limpeza básica de quebras de linha para facilitar a busca contextual
+    # Limpeza básica de espaços duplos para melhorar o regex
     texto_limpo = " ".join(texto.split())
 
     dados = {
@@ -29,20 +30,27 @@ def extrair_dados_pdf(file):
         "sei_verificador": re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE).group(1) if re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE) else ""
     }
 
-    # Data do Despacho (usada no Item 1)
-    data_despacho = re.search(r"(\d{2}\sde\s\w+\sde\s\d{4})", texto)
-    dados["data_proc"] = data_despacho.group(0) if data_despacho else datetime.now().strftime('%d/%m/%Y')
+    # Data do despacho (item 1)
+    datas_gerais = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
+    dados["data_despacho"] = datas_gerais[0] if datas_gerais else datetime.now().strftime('%d/%m/%Y')
 
-    # --- LÓGICA DE VALIDADES ESPECÍFICAS ---
-    # Busca data (XX/XX/XXXX) que aparece APÓS termos específicos
-    def buscar_validade(termo, txt):
-        pattern = re.compile(termo + r".*?(\d{2}/\d{2}/\d{4})", re.IGNORECASE)
-        match = pattern.search(txt)
-        return match.group(1) if match else "Verificar no processo"
+    # --- LÓGICA DE EXTRAÇÃO DE VALIDADES (ITENS 3, 4 e 5) ---
+    # Busca datas que venham após os termos "Válida até" ou "Validade"
+    # O regex busca: termo chave + caracteres opcionais + data no formato DD/MM/AAAA
+    padrao_validade = r"(?:Válida até|Validade|Valida ate|Valido ate)[:\s]*(\d{2}/\d{2}/\d{4})"
+    validades_encontradas = re.findall(padrao_validade, texto, re.IGNORECASE)
 
-    dados["val_federal"] = buscar_validade(r"Federal", texto_limpo)
-    dados["val_fgts"] = buscar_validade(r"FGTS", texto_limpo)
-    dados["val_trabalhista"] = buscar_validade(r"CNDT|Trabalhista", texto_limpo)
+    # Atribuição conforme a ordem de aparição comum nos processos do IPEM
+    dados["val_federal"] = validades_encontradas[0] if len(validades_encontradas) > 0 else "Verificar no PDF"
+    dados["val_fgts"] = validades_encontradas[1] if len(validades_encontradas) > 1 else "Verificar no PDF"
+    dados["val_trabalhista"] = validades_encontradas[2] if len(validades_encontradas) > 2 else "Verificar no PDF"
+
+    # Gestor e Fornecedor
+    re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
+    dados["fornecedor"] = re_forn.group(1).replace('\n', ' ').strip() if re_forn else "Não encontrado"
+    
+    re_gestor = re.search(r"assinado eletronicamente por\s*([A-Za-z\s]+),", texto)
+    dados["gestor"] = re_gestor.group(1).strip() if re_gestor else "Não identificado"
     
     return dados
 
@@ -51,6 +59,7 @@ def gerar_excel_oficial(dados_p, df_c):
     wb = Workbook()
     ws = wb.active
     ws.title = "Checklist Auditoria"
+    
     bold_f = Font(bold=True)
     border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     center = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -59,20 +68,28 @@ def gerar_excel_oficial(dados_p, df_c):
     ws['A1'] = "INSTITUTO DE PESOS E MEDIDAS IPEM/RJ — AUDITORIA INTERNA - AUDIT"
     ws['A1'].font = Font(bold=True, size=11); ws['A1'].alignment = center
 
-    info_h = [("Processo SEI:", dados_p['processo']), ("Fornecedor:", dados_p['fornecedor']), ("Contrato:", dados_p['contrato']), ("CNPJ:", dados_p['cnpj']), ("Valor Bruto:", dados_p['valor_bruto']), ("Gestor:", dados_p['gestor'])]
-    for idx, (label, val) in enumerate(info_h, start=2):
+    info_header = [
+        ("Processo SEI:", dados_p['processo']),
+        ("Fornecedor:", dados_p['fornecedor']),
+        ("Contrato:", dados_p['contrato']),
+        ("CNPJ:", dados_p['cnpj']),
+        ("Valor Bruto:", dados_p['valor_bruto']),
+        ("Gestor:", dados_p['gestor'])
+    ]
+    for idx, (label, val) in enumerate(info_header, start=2):
         ws.cell(row=idx, column=1, value=label).font = bold_f
         ws.cell(row=idx, column=2, value=val)
 
-    for c_idx, text in enumerate(["ITEM", "EVENTO A SER VERIFICADO", "S/N/NA", "OBSERVAÇÕES"], start=1):
+    cols = ["ITEM", "EVENTO A SER VERIFICADO", "S/N/NA", "OBSERVAÇÕES"]
+    for c_idx, text in enumerate(cols, start=1):
         cell = ws.cell(row=9, column=c_idx, value=text)
         cell.font = bold_f; cell.border = border; cell.alignment = center
 
     for r_idx, row in df_c.iterrows():
-        for c_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx+10, column=c_idx, value=value)
-            cell.border = border
-            if c_idx != 2: cell.alignment = center
+        ws.cell(row=r_idx+10, column=1, value=row['ITEM']).border = border
+        ws.cell(row=r_idx+10, column=2, value=row['EVENTO']).border = border
+        ws.cell(row=r_idx+10, column=3, value=row['S/N/NA']).border = border
+        ws.cell(row=r_idx+10, column=4, value=row['OBSERVAÇÕES']).border = border
 
     wb.save(output)
     return output.getvalue()
@@ -86,7 +103,7 @@ uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_proc']})"
+    obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_despacho']})"
     obs_sei = f"Documento SEI {d['sei_verificador']}"
     
     checklist_19 = [
@@ -101,7 +118,7 @@ if uploaded_file:
         {"ITEM": 9, "EVENTO": "Consulta de Sanções (CEIS/CNEP)", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
         {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
         {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
-        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "GAPRE"},
+        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
         {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
         {"ITEM": 14, "EVENTO": "Relação dos funcionários que executaram o serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
@@ -123,4 +140,4 @@ if uploaded_file:
         use_container_width=True
     )
 else:
-    st.info("Faça o upload do PDF para extrair as validades específicas das certidões.")
+    st.warning("Submeta o PDF para extrair as validades específicas das certidões.")
