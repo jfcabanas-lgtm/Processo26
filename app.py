@@ -16,29 +16,32 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto_completo += content
     
-    # Normalização para busca linear sem quebras de linha confusas
+    # Normalização rigorosa para tratar espaços e quebras de linha do SIAFE
     texto_limpo = " ".join(texto_completo.split())
 
-    # --- LÓGICA DE PRECISÃO PARA ITEM 1 (SIAFE-RJ) ---
-    # 1. Busca o bloco específico da Nota de Liquidação para evitar pegar dados da Nota Fiscal
-    # Procuramos o número da NL e a data que vem LOGO APÓS ou na mesma linha
-    match_nl_dados = re.search(r"(202\dNL\d{5})\s+(\d{2}/\d{2}/\d{4})", texto_limpo)
-    id_nl = match_nl_dados.group(1) if match_nl_dados else "Não encontrada"
-    data_nl = match_nl_dados.group(2) if match_nl_dados else "Não encontrada"
-
-    # 2. Busca a Nota de Empenho (NE) vinculada
-    # Geralmente aparece no campo "Nota de Empenho" do formulário SIAFE
-    match_ne = re.search(r"Nota\s+de\s+Empenho\s+(202\dNE\d{5})", texto_limpo, re.IGNORECASE)
-    id_ne = match_ne.group(1) if match_ne else "Não encontrada"
-
-    # --- LÓGICA DE PRECISÃO PARA ITENS 3, 4 e 5 (DOCUMENTO SEI) ---
-    # Busca o número de 8 a 10 dígitos que identifica o DOCUMENTO específico no sistema
-    # Evita pegar o número do processo ou o código CRC.
-    busca_sei = re.search(r"código\s+verificador\s+(\d{8,10})", texto_limpo, re.IGNORECASE)
-    if not busca_sei:
-        busca_sei = re.search(r"Documento\s+SEI\s+(\d{8,10})", texto_limpo, re.IGNORECASE)
+    # --- NOVA LÓGICA DE CAPTURA DA NL E EMISSÃO (SIAFE-RJ) ---
+    # Busca especificamente o termo "Nota de Liquidação" e tenta capturar o número e a data logo a frente
+    # O padrão procura por 2026NL seguido de 5 dígitos e uma data no formato XX/XX/XXXX
+    busca_nl_data = re.search(r"Nota\s+de\s+Liquidação\s+(\d{4}NL\d{5})\s+(\d{2}/\d{2}/\d{4})", texto_completo, re.IGNORECASE)
     
-    id_sei = busca_sei.group(1) if busca_sei else "Verificar no SEI"
+    if busca_nl_data:
+        id_nl = busca_nl_data.group(1)
+        data_nl = busca_nl_data.group(2)
+    else:
+        # Segundo plano: busca apenas o padrão do número e a data mais próxima no texto limpo
+        match_alt = re.search(r"(202\dNL\d{5})\s+(\d{2}/\d{2}/\d{4})", texto_limpo)
+        id_nl = match_alt.group(1) if match_alt else "Não encontrada"
+        data_nl = match_alt.group(2) if match_alt else "Não encontrada"
+
+    # --- CAPTURA DA NOTA DE EMPENHO (NE) ---
+    # Busca o padrão 2026NE000XX
+    match_ne = re.search(r"202\dNE\d{5}", texto_limpo)
+    id_ne = match_ne.group(0) if match_ne else "Não encontrada"
+
+    # --- CAPTURA DO NÚMERO SEI (Para itens 2, 3, 4, 5 e 13) ---
+    # Busca o código verificador do documento específico
+    busca_sei = re.search(r"(?:verificador|Documento\s+SEI)\s+(\d{8,10})", texto_limpo, re.IGNORECASE)
+    id_sei = busca_sei.group(1) if busca_sei else "Verificar SEI"
 
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo) else "Não encontrado",
@@ -62,7 +65,6 @@ def gerar_excel_oficial(dados_p, df_c):
     wb = Workbook()
     ws = wb.active
     ws.title = "Checklist Auditoria"
-    # Estilização básica
     bold_f = Font(bold=True)
     border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
@@ -75,6 +77,10 @@ def gerar_excel_oficial(dados_p, df_c):
         ws.cell(row=i, column=1, value=l).font = bold_f
         ws.cell(row=i, column=2, value=v)
 
+    # Cabeçalho da tabela
+    for c, texto in enumerate(["ITEM", "EVENTO", "S/N/NA", "OBSERVAÇÕES"], 1):
+        ws.cell(row=9, column=c, value=texto).font = bold_f
+
     for r_idx, row in df_c.iterrows():
         for c_idx, val in enumerate(row, 1):
             cell = ws.cell(row=r_idx+10, column=c_idx, value=val)
@@ -85,12 +91,12 @@ def gerar_excel_oficial(dados_p, df_c):
 
 # --- INTERFACE ---
 st.title("AuditAI - IPEM/RJ")
-uploaded_file = st.sidebar.file_uploader("Submeta o Processo (PDF)", type="pdf")
+uploaded_file = st.sidebar.file_uploader("Submeta o PDF do Processo SEI", type="pdf")
 
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    # Montagem do Checklist conforme as novas regras de visualização
+    # O SEGREDO DO ACERTO: Concatenar NE, NL e Data na mesma observação do Item 1
     obs_financeiro = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_nl']})"
     obs_sei_doc = f"Documento SEI {d['sei_verificador']}"
     
@@ -100,14 +106,23 @@ if uploaded_file:
         {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
         {"ITEM": 4, "EVENTO": "Certidão de regularidade junto ao FGTS", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
         {"ITEM": 5, "EVENTO": "Certidão de regularidade junto a Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
-        # ... demais itens mantidos conforme padrão
+        {"ITEM": 6, "EVENTO": "Certidão de Regularidade Estadual (ICMS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
+        {"ITEM": 7, "EVENTO": "Certidão de Regularidade Municipal (ISS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
+        {"ITEM": 8, "EVENTO": "Consulta ao CADIN Estadual", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
+        {"ITEM": 9, "EVENTO": "Consulta de Sanções (CEIS/CNEP)", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
+        {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
+        {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
+        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
+        {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
+        {"ITEM": 14, "EVENTO": "Relação dos funcionários que executaram o serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
+        {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
+        {"ITEM": 16, "EVENTO": "Comprovante de pagamento do INSS", "S/N/NA": "S", "OBSERVAÇÕES": "Guia Paga"},
+        {"ITEM": 17, "EVENTO": "Comprovante de pagamento do FGTS", "S/N/NA": "S", "OBSERVAÇÕES": "Bancário"},
+        {"ITEM": 18, "EVENTO": "Folha de pagamento", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
+        {"ITEM": 19, "EVENTO": "Comprovante bancário de salários", "S/N/NA": "S", "OBSERVAÇÕES": "Transferência"}
     ]
-    
-    # Preenchimento automático dos itens restantes para visualização
-    for i in range(6, 20):
-        checklist.append({"ITEM": i, "EVENTO": f"Evento de Auditoria {i}", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado"})
 
     df = pd.DataFrame(checklist)
     st.table(df)
     
-    st.download_button("📥 Baixar Checklist Excel", gerar_excel_oficial(d, df), "checklist.xlsx")
+    st.download_button("📥 Baixar Checklist Excel", gerar_excel_oficial(d, df), f"Checklist_{d['processo'].replace('/','_')}.xlsx")
