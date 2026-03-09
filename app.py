@@ -17,45 +17,45 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
-    # Normalização do texto para busca
     texto_norm = " ".join(texto.split())
 
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
         "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto) else "Não encontrado",
-        "contrato": re.search(r"2100\d{4}", texto).group(0) if re.search(r"2100\d{4}", texto) else "Não encontrado",
+        "contrato": re.search(r"\d{10}", texto).group(0) if re.search(r"\d{10}", texto) else "Não encontrado",
         "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "2026NEXXXXX",
         "liquidacao": re.search(r"202\dNL\d{5}", texto).group(0) if re.search(r"202\dNL\d{5}", texto) else "2026NLXXXXX",
         "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "R$ 0,00",
         "sei_verificador": re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE).group(1) if re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE) else ""
     }
 
-    # Data do Despacho (Item 1)
+    # Data do Despacho
     datas_gerais = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
     dados["data_despacho"] = datas_gerais[0] if datas_gerais else datetime.now().strftime('%d/%m/%Y')
 
-    # --- FUNÇÃO DE BUSCA POR CONTEXTO (Para não misturar os itens 3, 4 e 5) ---
-    def extrair_validade_por_contexto(termo_chave, texto_fonte):
-        # Localiza a posição do termo (ex: FGTS) e busca a validade nos 300 caracteres seguintes
-        pos = texto_fonte.upper().find(termo_chave.upper())
-        if pos != -1:
-            trecho = texto_fonte[pos:pos+350]
-            # Busca formato de data simples ou período (XX/XX/XXXX a YY/YY/YYYY)
-            match = re.search(r"(\d{2}/\d{2}/\d{4}(?:\s*a\s*\d{2}/\d{2}/\d{4})?)", trecho)
-            if match: return match.group(1)
+    # --- LÓGICA DE ANCORAGEM PARA CERTIDÕES ---
+    def buscar_por_ancora(termos_ancora, texto_fonte):
+        for termo in termos_ancora:
+            pos = texto_fonte.upper().find(termo.upper())
+            if pos != -1:
+                # Pega um bloco de 400 caracteres após o nome da certidão
+                trecho = texto_fonte[pos:pos+400]
+                # Busca por período (comum no CRF) ou data única
+                match = re.search(r"(\d{2}/\d{2}/\d{4}(?:\s*a\s*\d{2}/\d{2}/\d{4})?)", trecho)
+                if match: return match.group(1)
         return "Verificar no PDF"
 
-    # Item 3: Federal (Busca por Receita Federal ou Dívida Ativa)
-    dados["val_federal"] = extrair_validade_por_contexto("RECEITA FEDERAL", texto_norm)
+    # Item 3: Federal (Âncoras: Receita Federal, Dívida Ativa, Portaria Conjunta)
+    dados["val_federal"] = buscar_por_ancora(["RECEITA FEDERAL", "DIVIDA ATIVA", "CONJUNTA PGFN"], texto_norm)
     
-    # Item 4: FGTS (Busca por FGTS ou CRF)
-    dados["val_fgts"] = extrair_validade_por_contexto("FGTS", texto_norm)
+    # Item 4: FGTS (Âncoras: CRF, FGTS, Fundo de Garantia)
+    dados["val_fgts"] = buscar_por_ancora(["CRF", "FGTS", "FUNDO DE GARANTIA"], texto_norm)
     
-    # Item 5: Trabalhista (Busca por JUSTIÇA DO TRABALHO ou CNDT)
-    dados["val_trabalhista"] = extrair_validade_por_contexto("JUSTIÇA DO TRABALHO", texto_norm)
+    # Item 5: Trabalhista (Âncoras: CNDT, TRABALHISTA, JUSTIÇA DO TRABALHO)
+    dados["val_trabalhista"] = buscar_por_ancora(["CNDT", "TRABALHISTA", "JUSTIÇA DO TRABALHO"], texto_norm)
 
-    # Fornecedor e Gestor
-    re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
+    # Identificação do Fornecedor e Gestor
+    re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:|Beneficiário)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
     dados["fornecedor"] = re_forn.group(1).replace('\n', ' ').strip() if re_forn else "Não encontrado"
     
     re_gestor = re.search(r"assinado eletronicamente por\s*([A-Za-z\s]+),", texto)
@@ -147,4 +147,4 @@ if uploaded_file:
         use_container_width=True
     )
 else:
-    st.warning("Aguardando upload do PDF para análise técnica.")
+    st.warning("Submeta o PDF para análise técnica automática.")
