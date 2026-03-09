@@ -17,8 +17,8 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
-    # Limpeza para facilitar o Regex
-    texto_processado = " ".join(texto.split())
+    # Normalização do texto para busca
+    texto_norm = " ".join(texto.split())
 
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
@@ -30,34 +30,31 @@ def extrair_dados_pdf(file):
         "sei_verificador": re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE).group(1) if re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE) else ""
     }
 
-    # Data do despacho para o Item 1
+    # Data do Despacho (Item 1)
     datas_gerais = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
     dados["data_despacho"] = datas_gerais[0] if datas_gerais else datetime.now().strftime('%d/%m/%Y')
 
-    # --- LÓGICA DE EXTRAÇÃO DE VALIDADES MELHORADA ---
+    # --- FUNÇÃO DE BUSCA POR CONTEXTO (Para não misturar os itens 3, 4 e 5) ---
+    def extrair_validade_por_contexto(termo_chave, texto_fonte):
+        # Localiza a posição do termo (ex: FGTS) e busca a validade nos 300 caracteres seguintes
+        pos = texto_fonte.upper().find(termo_chave.upper())
+        if pos != -1:
+            trecho = texto_fonte[pos:pos+350]
+            # Busca formato de data simples ou período (XX/XX/XXXX a YY/YY/YYYY)
+            match = re.search(r"(\d{2}/\d{2}/\d{4}(?:\s*a\s*\d{2}/\d{2}/\d{4})?)", trecho)
+            if match: return match.group(1)
+        return "Verificar no PDF"
+
+    # Item 3: Federal (Busca por Receita Federal ou Dívida Ativa)
+    dados["val_federal"] = extrair_validade_por_contexto("RECEITA FEDERAL", texto_norm)
     
-    # Padrão para capturar data após palavras-chave (Federal e Trabalhista)
-    def buscar_validade(pattern, text):
-        match = re.search(pattern, text, re.IGNORECASE)
-        return match.group(1) if match else "Verificar no PDF"
+    # Item 4: FGTS (Busca por FGTS ou CRF)
+    dados["val_fgts"] = extrair_validade_por_contexto("FGTS", texto_norm)
+    
+    # Item 5: Trabalhista (Busca por JUSTIÇA DO TRABALHO ou CNDT)
+    dados["val_trabalhista"] = extrair_validade_por_contexto("JUSTIÇA DO TRABALHO", texto_norm)
 
-    # Padrão para capturar período (comum no CRF/FGTS: "DD/MM/AAAA a DD/MM/AAAA")
-    def buscar_periodo(text):
-        match = re.search(r"(\d{2}/\d{2}/\d{4}\s*a\s*\d{2}/d{2}/\d{4})", text, re.IGNORECASE)
-        if not match:
-            # Se não achar período, busca a data isolada após "Válida até"
-            match = re.search(r"(?:Válida até|Validade|Vigência)[:\s]*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
-        return match.group(1) if match else "Verificar no PDF"
-
-    # Tentativa de localizar blocos de texto específicos para cada certidão (Federal, FGTS, CNDT)
-    # Nota: Em PDFs complexos, a ordem de aparição no texto extraído costuma seguir a ordem das páginas.
-    validades_lista = re.findall(r"(?:Válida até|Validade|Vigência)[:\s]*(\d{2}/\d{2}/\d{4}(?:\s*a\s*\d{2}/\d{2}/\d{4})?)", texto, re.IGNORECASE)
-
-    dados["val_federal"] = validades_lista[0] if len(validades_lista) > 0 else "Verificar"
-    dados["val_fgts"] = validades_lista[1] if len(validades_lista) > 1 else "Verificar"
-    dados["val_trabalhista"] = validades_lista[2] if len(validades_lista) > 2 else "Verificar"
-
-    # Gestor e Fornecedor
+    # Fornecedor e Gestor
     re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
     dados["fornecedor"] = re_forn.group(1).replace('\n', ' ').strip() if re_forn else "Não encontrado"
     
@@ -150,4 +147,4 @@ if uploaded_file:
         use_container_width=True
     )
 else:
-    st.warning("Submeta o PDF para analisar as certidões e validades.")
+    st.warning("Aguardando upload do PDF para análise técnica.")
