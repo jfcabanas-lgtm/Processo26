@@ -6,86 +6,66 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
-# Configurações de Interface
 st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
 
 def extrair_dados_pdf(file):
     texto_completo = ""
     reader = PyPDF2.PdfReader(file)
+    paginas = []
     for page in reader.pages:
         content = page.extract_text()
-        if content: texto_completo += content
+        if content:
+            texto_completo += content
+            paginas.append(content)
     
-    # Normalização para busca linear
     texto_limpo = " ".join(texto_completo.split())
 
-    # --- LÓGICA DE EXTRAÇÃO PARA ITEM 1 (SIAFE-RJ) ---
+    # --- FUNÇÃO INTERNA PARA BUSCAR SEI POR PALAVRA-CHAVE ---
+    def buscar_sei_por_contexto(termo_chave):
+        for p in paginas:
+            if termo_chave.lower() in p.lower():
+                match = re.search(r"(?:verificador|Documento\s+SEI)\s+(\d{8,10})", p, re.IGNORECASE)
+                if match: return match.group(1)
+        return "Verificar no SEI"
+
+    # --- EXTRAÇÃO DE DADOS FINANCEIROS (ITEM 1) ---
     id_nl = "Não encontrada"
     id_ne = "Não encontrada"
-    
-    # 1. Localiza a Nota de Liquidação (NL) - Padrão 2026NLXXXXX
     match_nl = re.search(r"202\dNL\d{5}", texto_limpo)
-    if match_nl:
-        id_nl = match_nl.group(0)
-
-    # 2. Localiza a Nota de Empenho (NE) - Padrão 2026NEXXXXX
-    # Captura a NE que consta no documento (ex: 2026NE00021)
+    if match_nl: id_nl = match_nl.group(0)
     match_ne = re.search(r"202\dNE\d{5}", texto_limpo)
-    if match_ne:
-        id_ne = match_ne.group(0)
+    if match_ne: id_ne = match_ne.group(0)
 
-    # --- IDENTIFICAÇÃO SEI (CÓDIGO VERIFICADOR) ---
-    # Captura o número de 8 a 10 dígitos do documento
-    busca_sei = re.search(r"(?:verificador|Documento\s+SEI)\s+(\d{8,10})", texto_limpo, re.IGNORECASE)
-    id_sei = busca_sei.group(1) if busca_sei else "Verificar SEI"
-
-    # Captura do Número do Processo
-    re_proc = re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo)
-    processo_num = re_proc.group(0) if re_proc else "Não encontrado"
-
+    # --- EXTRAÇÃO INDIVIDUAL DE DOCUMENTOS SEI ---
     return {
-        "processo": processo_num,
+        "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo) else "Não encontrado",
         "empenho": id_ne,
         "liquidacao": id_nl,
-        "sei_verificador": id_sei
+        "sei_nota_fiscal": buscar_sei_por_contexto("Nota Fiscal"),
+        "sei_federal": buscar_sei_por_contexto("Certidão Negativa de Débitos Relativos a Créditos Tributários Federais"),
+        "sei_fgts": buscar_sei_por_contexto("Certificado de Regularidade do FGTS"),
+        "sei_trabalhista": buscar_sei_por_contexto("Certidão Negativa de Débitos Trabalhistas"),
+        "sei_gestor": buscar_sei_por_contexto("Atesto")
     }
 
-def gerar_excel_limpo(dados_p, df_c):
-    output = io.BytesIO()
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Auditoria"
-    ws['A1'] = "IPEM/RJ - CHECKLIST DE AUDITORIA"
-    ws['A2'] = f"Processo: {dados_p['processo']}"
-    wb.save(output)
-    return output.getvalue()
-
-# --- INTERFACE STREAMLIT ---
-st.markdown("<h2 style='text-align: center;'>AUDIT - IPEM/RJ</h2>", unsafe_allow_html=True)
-uploaded_file = st.sidebar.file_uploader("Carregar PDF do Processo SEI", type="pdf")
+# --- INTERFACE ---
+st.title("🛡️ AuditAI - IPEM/RJ")
+uploaded_file = st.sidebar.file_uploader("Upload do Processo (PDF)", type="pdf")
 
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    # Formatação exata conforme solicitado: 2026NExxxxx - Gerando a 2026NLXXXXX
-    obs_financeiro = f"{d['empenho']} - Gerando a {d['liquidacao']}"
-    obs_sei = f"Documento SEI {d['sei_verificador']}"
+    obs_1 = f"{d['empenho']} - Gerando a {d['liquidacao']}"
     
     checklist = [
-        {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_financeiro},
-        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 3, "EVENTO": "Certidão Federal e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 4, "EVENTO": "Certidão de FGTS", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 5, "EVENTO": "Certidão de Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 13, "EVENTO": "Atestado do Gestor", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
+        {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_1},
+        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura", "S/N/NA": "S", "OBSERVAÇÕES": f"Documento SEI {d['sei_nota_fiscal']}"},
+        {"ITEM": 3, "EVENTO": "Certidão Federal e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": f"Documento SEI {d['sei_federal']}"},
+        {"ITEM": 4, "EVENTO": "Certidão de FGTS", "S/N/NA": "S", "OBSERVAÇÕES": f"Documento SEI {d['sei_fgts']}"},
+        {"ITEM": 5, "EVENTO": "Certidão de Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": f"Documento SEI {d['sei_trabalhista']}"},
+        {"ITEM": 13, "EVENTO": "Atestado do Gestor", "S/N/NA": "S", "OBSERVAÇÕES": f"Documento SEI {d['sei_gestor']}"},
     ]
     
-    # Preenchimento automático dos itens restantes
-    for i in range(6, 20):
-        if i != 13:
-            checklist.append({"ITEM": i, "EVENTO": f"Verificação de Auditoria {i}", "S/N/NA": "S", "OBSERVAÇÕES": "Conforme processo"})
-
-    df = pd.DataFrame(checklist).sort_values("ITEM")
+    df = pd.DataFrame(checklist)
     st.table(df)
-    
-    st.download_button("📥 Baixar Checklist", gerar_excel_limpo(d, df), f"Checklist_{d['processo'].replace('/','_')}.xlsx")
+    st.download_button("📥 Baixar Checklist", io.BytesIO().getvalue(), "checklist.xlsx")
