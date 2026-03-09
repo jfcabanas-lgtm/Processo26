@@ -7,7 +7,7 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
-# 1. Configurações Iniciais
+# 1. Configurações de Layout
 st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
 
 def extrair_dados_pdf(file):
@@ -17,6 +17,7 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
+    # Extração de dados
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
         "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto) else "Não encontrado",
@@ -24,13 +25,18 @@ def extrair_dados_pdf(file):
         "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "2026NEXXXXX",
         "liquidacao": re.search(r"202\dNL\d{5}", texto).group(0) if re.search(r"202\dNL\d{5}", texto) else "2026NLXXXXX",
         "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "R$ 0,00",
-        "sei_verificador": re.search(r"verificador\s(\d{9})", texto).group(1) if re.search(r"verificador\s(\d{9})", texto) else ""
     }
 
+    # BUSCA DO CÓDIGO VERIFICADOR SEI (O número que você quer no item 2)
+    busca_sei = re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE)
+    dados["sei_verificador"] = busca_sei.group(1) if busca_sei else "[NÚMERO NÃO IDENTIFICADO]"
+
+    # Datas
     datas = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
     dados["data_proc"] = datas[0] if datas else datetime.now().strftime('%d/%m/%Y')
     dados["validade"] = max(datas, key=lambda d: datetime.strptime(d, '%d/%m/%Y')) if datas else "Verificar"
 
+    # Fornecedor e Gestor
     re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
     dados["fornecedor"] = re_forn.group(1).replace('\n', ' ').strip() if re_forn else "Não encontrado"
     
@@ -74,10 +80,10 @@ def gerar_excel_oficial(dados_p, df_c):
         cell.alignment = center
 
     for r_idx, row in df_c.iterrows():
-        for c_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx+10, column=c_idx, value=value)
-            cell.border = border
-            if c_idx != 2: cell.alignment = center
+        ws.cell(row=r_idx+10, column=1, value=row['ITEM']).border = border
+        ws.cell(row=r_idx+10, column=2, value=row['EVENTO']).border = border
+        ws.cell(row=r_idx+10, column=3, value=row['S/N/NA']).border = border
+        ws.cell(row=r_idx+10, column=4, value=row['OBSERVAÇÕES']).border = border
 
     wb.save(output)
     return output.getvalue()
@@ -91,32 +97,25 @@ uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.info(f"**Processo:** {d['processo']}\n\n**Fornecedor:** {d['fornecedor']}")
-    with c2:
-        st.success(f"**Valor Bruto:** {d['valor_bruto']}\n\n**Gestor:** {d['gestor']}")
-
-    st.divider()
-
+    # Observações formatadas conforme solicitado
     obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_proc']})"
-    obs_sei = f"Documento SEI {d['sei_verificador']}"
+    obs_sei_doc = f"Documento SEI {d['sei_verificador']}"
     
     checklist_19 = [
         {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_1},
-        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
+        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
         {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
-        {"ITEM": 4, "EVENTO": "Certidão de regularidade - CRF (FGTS)", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
-        {"ITEM": 5, "EVENTO": "Certidão de regularidade - CNDT", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
+        {"ITEM": 4, "EVENTO": "Certidão de regularidade junto ao FGTS", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
+        {"ITEM": 5, "EVENTO": "Certidão de regularidade junto a Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
         {"ITEM": 6, "EVENTO": "Certidão de Regularidade Estadual (ICMS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 7, "EVENTO": "Certidão de Regularidade Municipal (ISS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 8, "EVENTO": "Consulta ao CADIN Estadual", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
         {"ITEM": 9, "EVENTO": "Consulta de Sanções (CEIS/CNEP)", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
         {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
         {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
-        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "GAPRE"},
-        {"ITEM": 13, "EVENTO": "Atestado do Gestor (Serviços prestados)", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
-        {"ITEM": 14, "EVENTO": "Relação dos funcionários do serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
+        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
+        {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
+        {"ITEM": 14, "EVENTO": "Relação dos funcionários que executaram o serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 16, "EVENTO": "Comprovante de pagamento do INSS", "S/N/NA": "S", "OBSERVAÇÕES": "Guia Paga"},
         {"ITEM": 17, "EVENTO": "Comprovante de pagamento do FGTS", "S/N/NA": "S", "OBSERVAÇÕES": "Bancário"},
