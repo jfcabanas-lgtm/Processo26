@@ -136,4 +136,10 @@ if file:
     excel_file = gerar_excel_oficial(d, df_final)
     st.download_button(
         label="📥 GERAR RELATÓRIO OFICIAL (19 ITENS)",
-        data=excel
+        data=excel_file,
+        file_name=f"Checklist_AUDIT_{d['processo'].replace('/','_')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+else:
+    st.info("Aguardando upload do PDF para processar o checklist completo da PLIMA.")
