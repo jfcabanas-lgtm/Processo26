@@ -7,7 +7,7 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
-# 1. Configurações de Layout
+# 1. Configurações Iniciais
 st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
 
 def extrair_dados_pdf(file):
@@ -17,7 +17,7 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
-    # Extração de dados fundamentais
+    # Extração de dados com Regex
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
         "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto) else "Não encontrado",
@@ -25,11 +25,10 @@ def extrair_dados_pdf(file):
         "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "2026NEXXXXX",
         "liquidacao": re.search(r"202\dNL\d{5}", texto).group(0) if re.search(r"202\dNL\d{5}", texto) else "2026NLXXXXX",
         "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "R$ 0,00",
-        # Captura especificamente o código verificador principal de 9 dígitos
-        "sei_verificador": re.search(r"verificador\s(\d{9})", texto).group(1) if re.search(r"verificador\s(\d{9})", texto) else ""
+        "sei_verificador": re.search(r"verificador\s(\d{9})", texto).group(1) if re.search(r"verificador\s(\d{9})", texto) else "Não identificado"
     }
 
-    # Data e Validades
+    # Datas
     datas = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
     dados["data_proc"] = datas[0] if datas else datetime.now().strftime('%d/%m/%Y')
     dados["validade"] = max(datas, key=lambda d: datetime.strptime(d, '%d/%m/%Y')) if datas else "Verificar"
@@ -72,7 +71,7 @@ def gerar_excel_oficial(dados_p, df_c):
         ws.cell(row=idx, column=1, value=label).font = bold_f
         ws.cell(row=idx, column=2, value=val)
 
-    # Cabeçalho da Tabela (Linha 9)
+    # Cabeçalho da Tabela
     cols = ["ITEM", "EVENTO A SER VERIFICADO", "S/N/NA", "OBSERVAÇÕES"]
     for c_idx, text in enumerate(cols, start=1):
         cell = ws.cell(row=9, column=c_idx, value=text)
@@ -80,7 +79,7 @@ def gerar_excel_oficial(dados_p, df_c):
         cell.border = border
         cell.alignment = center
 
-    # Itens (Linha 10 em diante)
+    # Preenchimento dos Itens
     for r_idx, row in df_c.iterrows():
         for c_idx, value in enumerate(row, start=1):
             cell = ws.cell(row=r_idx+10, column=c_idx, value=value)
@@ -90,9 +89,9 @@ def gerar_excel_oficial(dados_p, df_c):
     wb.save(output)
     return output.getvalue()
 
-# --- INTERFACE ---
+# --- INTERFACE STREAMLIT ---
 st.markdown("<h2 style='text-align: center; color: #1f4e78;'>AUDIT - IPEM/RJ</h2>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align: center;'>Checklist da Documentação Apresentada</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align: center;'>Gerador de Checklist (19 Itens)</h4>", unsafe_allow_html=True)
 st.divider()
 
 uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf")
@@ -100,49 +99,30 @@ uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    # Resumo Superior
+    # Painel Visual
     c1, c2 = st.columns(2)
     with c1:
-        st.info(f"**Processo:** {d['processo']}\n\n**Fornecedor:** {d['fornecedor']}\n\n**Contrato:** {d['contrato']}")
+        st.info(f"**Processo:** {d['processo']}\n\n**Fornecedor:** {d['fornecedor']}")
     with c2:
-        st.success(f"**Valor Bruto:** {d['valor_bruto']}\n\n**Gestor:** {d['gestor']}\n\n**CNPJ:** {d['cnpj']}")
+        st.success(f"**Valor Bruto:** {d['valor_bruto']}\n\n**Gestor:** {d['gestor']}")
 
     st.divider()
 
-    # Formatação dos Itens conforme solicitado
+    # Definição das Observações Específicas
     obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_proc']})"
-    obs_2 = f"Documento SEI {d['sei_verificador']}"
+    obs_sei = f"Documento SEI {d['sei_verificador']}"
     
     checklist_19 = [
         {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_1},
-        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_2},
-        {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
-        {"ITEM": 4, "EVENTO": "Certidão de regularidade - CRF (FGTS)", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
-        {"ITEM": 5, "EVENTO": "Certidão de regularidade - CNDT", "S/N/NA": "S", "OBSERVAÇÕES": f"Val: {d['validade']}"},
+        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
+        {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": f"Válida até: {d['validade']}"},
+        {"ITEM": 4, "EVENTO": "Certidão de regularidade - CRF (FGTS)", "S/N/NA": "S", "OBSERVAÇÕES": f"Válida até: {d['validade']}"},
+        {"ITEM": 5, "EVENTO": "Certidão de regularidade - CNDT", "S/N/NA": "S", "OBSERVAÇÕES": f"Válida até: {d['validade']}"},
         {"ITEM": 6, "EVENTO": "Certidão de Regularidade Estadual (ICMS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 7, "EVENTO": "Certidão de Regularidade Municipal (ISS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 8, "EVENTO": "Consulta ao CADIN Estadual", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
         {"ITEM": 9, "EVENTO": "Consulta de Sanções (CEIS/CNEP)", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
         {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
         {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
-        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "GAPRE"},
-        {"ITEM": 13, "EVENTO": "Atestado do Gestor (Serviços prestados)", "S/N/NA": "S", "OBSERVAÇÕES": obs_2},
-        {"ITEM": 14, "EVENTO": "Relação dos funcionários do serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
-        {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
-        {"ITEM": 16, "EVENTO": "Comprovante de pagamento do INSS", "S/N/NA": "S", "OBSERVAÇÕES": "Guia Paga"},
-        {"ITEM": 17, "EVENTO": "Comprovante de pagamento do FGTS", "S/N/NA": "S", "OBSERVAÇÕES": "Bancário"},
-        {"ITEM": 18, "EVENTO": "Folha de pagamento", "S/N/NA": "S", "OBSERVAÇÕES": "Janeiro/2026"},
-        {"ITEM": 19, "EVENTO": "Comprovante bancário de salários", "S/N/NA": "S", "OBSERVAÇÕES": "Transferência"}
-    ]
-
-    df_final = pd.DataFrame(checklist_19)
-    st.table(df_final)
-
-    # Botão de Exportação
-    excel_data = gerar_excel_oficial(d, df_final)
-    st.download_button(
-        label="📥 GERAR CHECKLIST OFICIAL (19 ITENS)",
-        data=excel_data,
-        file_name=f"Checklist_Audit_{d['processo'].replace('/','_')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use
+        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
+        {"ITEM": 13, "EVENTO": "Atestado do Gest
