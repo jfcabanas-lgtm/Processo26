@@ -17,19 +17,29 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
+    # Normalização para busca
+    texto_limpo = " ".join(texto.split())
+
+    # Extração de dados com filtros mais rígidos
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
         "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto) else "Não encontrado",
-        "contrato": re.search(r"\d{10}", texto).group(0) if re.search(r"\d{10}", texto) else "Não encontrado",
-        "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "2026NEXXXXX",
-        "liquidacao": re.search(r"202\dNL\d{5}", texto).group(0) if re.search(r"202\dNL\d{5}", texto) else "2026NLXXXXX",
-        "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "R$ 0,00",
-        "sei_verificador": re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE).group(1) if re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE) else "Documento SEI"
+        "contrato": re.search(r"(?:99\d{8}|2100\d{4})", texto).group(0) if re.search(r"(?:99\d{8}|2100\d{4})", texto) else "Não encontrado",
+        "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "202XNEXXXXX",
+        "liquidacao": re.search(r"202\dNL\d{5}", texto).group(0) if re.search(r"202\dNL\d{5}", texto) else "202XNLXXXXX",
+        "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "R$ 0,00"
     }
 
-    # Data do Despacho (Item 1)
-    datas_gerais = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
-    dados["data_despacho"] = datas_gerais[0] if datas_gerais else datetime.now().strftime('%d/%m/%Y')
+    # CAPTURA DO NÚMERO SEI (Melhorada para os itens 3, 4 e 5)
+    # Busca o número de 8 a 10 dígitos que aparece após "Documento SEI" ou "nº"
+    busca_sei = re.search(r"(?:Documento\sSEI|nº|verificador)\s*(\d{8,10})", texto, re.IGNORECASE)
+    dados["sei_verificador"] = busca_sei.group(1) if busca_sei else "Verificar no SEI"
+
+    # CAPTURA DA DATA DA NL (Para o item 1)
+    # Busca a data que aparece próxima ao código da Liquidação (NL)
+    padrao_data_nl = r"202\dNL\d{5}.*?(\d{2}/\d{2}/\d{4})"
+    busca_data_nl = re.search(padrao_data_nl, texto_limpo)
+    dados["data_nl"] = busca_data_nl.group(1) if busca_data_nl else datetime.now().strftime('%d/%m/%Y')
 
     # Identificação do Fornecedor e Gestor
     re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:|Beneficiário)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
@@ -81,21 +91,22 @@ def gerar_excel_oficial(dados_p, df_c):
 
 # --- INTERFACE ---
 st.markdown("<h2 style='text-align: center; color: #1f4e78;'>AUDIT - IPEM/RJ</h2>", unsafe_allow_html=True)
-st.divider()
 
 uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf")
 
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
-    obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_despacho']})"
-    obs_sei_geral = f"Documento SEI {d['sei_verificador']}"
+    
+    # Formatação das Observações conforme solicitado
+    obs_nl = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_nl']})"
+    obs_sei_doc = f"Documento SEI {d['sei_verificador']}"
     
     checklist_19 = [
-        {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_1},
-        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
-        {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
-        {"ITEM": 4, "EVENTO": "Certidão de regularidade junto ao FGTS", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
-        {"ITEM": 5, "EVENTO": "Certidão de regularidade junto a Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
+        {"ITEM": 1, "EVENTO": "Nota de empenho e demonstrativo de saldo", "S/N/NA": "S", "OBSERVAÇÕES": obs_nl},
+        {"ITEM": 2, "EVENTO": "Nota Fiscal / Fatura em nome do IPEM", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
+        {"ITEM": 3, "EVENTO": "Certidão Tributos Federais e Dívida Ativa", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
+        {"ITEM": 4, "EVENTO": "Certidão de regularidade junto ao FGTS", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
+        {"ITEM": 5, "EVENTO": "Certidão de regularidade junto a Justiça do Trabalho", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
         {"ITEM": 6, "EVENTO": "Certidão de Regularidade Estadual (ICMS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 7, "EVENTO": "Certidão de Regularidade Municipal (ISS)", "S/N/NA": "S", "OBSERVAÇÕES": "Verificada"},
         {"ITEM": 8, "EVENTO": "Consulta ao CADIN Estadual", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
@@ -103,7 +114,7 @@ if uploaded_file:
         {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
         {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
         {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
-        {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_geral},
+        {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei_doc},
         {"ITEM": 14, "EVENTO": "Relação dos funcionários que executaram o serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 16, "EVENTO": "Comprovante de pagamento do INSS", "S/N/NA": "S", "OBSERVAÇÕES": "Guia Paga"},
@@ -123,5 +134,3 @@ if uploaded_file:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
-else:
-    st.warning("Submeta o PDF para gerar o checklist com os números SEI.")
