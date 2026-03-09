@@ -7,7 +7,6 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
-# 1. Configurações de Layout
 st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
 
 def extrair_dados_pdf(file):
@@ -17,7 +16,9 @@ def extrair_dados_pdf(file):
         content = page.extract_text()
         if content: texto += content
     
-    # Extração de dados básicos
+    # Limpeza básica de quebras de linha para facilitar a busca contextual
+    texto_limpo = " ".join(texto.split())
+
     dados = {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto) else "Não encontrado",
         "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto) else "Não encontrado",
@@ -25,38 +26,23 @@ def extrair_dados_pdf(file):
         "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "2026NEXXXXX",
         "liquidacao": re.search(r"202\dNL\d{5}", texto).group(0) if re.search(r"202\dNL\d{5}", texto) else "2026NLXXXXX",
         "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "R$ 0,00",
+        "sei_verificador": re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE).group(1) if re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE) else ""
     }
 
-    # Busca do Código Verificador SEI
-    busca_sei = re.search(r"verificador\s*(\d{7,10})", texto, re.IGNORECASE)
-    dados["sei_verificador"] = busca_sei.group(1) if busca_sei else ""
+    # Data do Despacho (usada no Item 1)
+    data_despacho = re.search(r"(\d{2}\sde\s\w+\sde\s\d{4})", texto)
+    dados["data_proc"] = data_despacho.group(0) if data_despacho else datetime.now().strftime('%d/%m/%Y')
 
-    # Captura da data do despacho para o Item 1
-    datas_gerais = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
-    dados["data_despacho"] = datas_gerais[0] if datas_gerais else datetime.now().strftime('%d/%m/%Y')
+    # --- LÓGICA DE VALIDADES ESPECÍFICAS ---
+    # Busca data (XX/XX/XXXX) que aparece APÓS termos específicos
+    def buscar_validade(termo, txt):
+        pattern = re.compile(termo + r".*?(\d{2}/\d{2}/\d{4})", re.IGNORECASE)
+        match = pattern.search(txt)
+        return match.group(1) if match else "Verificar no processo"
 
-    # Lógica para Validades Específicas (Itens 3, 4 e 5)
-    # Tenta encontrar datas próximas a termos específicos ou usa a maior data como fallback
-    dados["val_federal"] = "Verificar"
-    dados["val_fgts"] = "Verificar"
-    dados["val_trabalhista"] = "Verificar"
-
-    if datas_gerais:
-        # Em processos da PLIMA, as certidões costumam aparecer em sequência.
-        # Aqui pegamos as datas únicas e distribuímos (ajuste conforme o padrão do seu PDF)
-        datas_unicas = sorted(list(set(datas_gerais)), key=lambda x: datetime.strptime(x, '%d/%m/%Y'), reverse=True)
-        
-        # Atribuição inteligente baseada na recorrência (ajustável conforme necessidade)
-        dados["val_federal"] = datas_unicas[0] if len(datas_unicas) > 0 else "Verificar"
-        dados["val_fgts"] = datas_unicas[1] if len(datas_unicas) > 1 else dados["val_federal"]
-        dados["val_trabalhista"] = datas_unicas[2] if len(datas_unicas) > 2 else dados["val_federal"]
-
-    # Fornecedor e Gestor
-    re_forn = re.search(r"(?:favor de|em favor de|Fornecedor:)\s*([A-Z\s\d\/\.\-\&]{5,100})", texto)
-    dados["fornecedor"] = re_forn.group(1).replace('\n', ' ').strip() if re_forn else "Não encontrado"
-    
-    re_gestor = re.search(r"assinado eletronicamente por\s*([A-Za-z\s]+),", texto)
-    dados["gestor"] = re_gestor.group(1).strip() if re_gestor else "Não identificado"
+    dados["val_federal"] = buscar_validade(r"Federal", texto_limpo)
+    dados["val_fgts"] = buscar_validade(r"FGTS", texto_limpo)
+    dados["val_trabalhista"] = buscar_validade(r"CNDT|Trabalhista", texto_limpo)
     
     return dados
 
@@ -65,7 +51,6 @@ def gerar_excel_oficial(dados_p, df_c):
     wb = Workbook()
     ws = wb.active
     ws.title = "Checklist Auditoria"
-    
     bold_f = Font(bold=True)
     border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     center = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -74,20 +59,12 @@ def gerar_excel_oficial(dados_p, df_c):
     ws['A1'] = "INSTITUTO DE PESOS E MEDIDAS IPEM/RJ — AUDITORIA INTERNA - AUDIT"
     ws['A1'].font = Font(bold=True, size=11); ws['A1'].alignment = center
 
-    info_header = [
-        ("Processo SEI:", dados_p['processo']),
-        ("Fornecedor:", dados_p['fornecedor']),
-        ("Contrato:", dados_p['contrato']),
-        ("CNPJ:", dados_p['cnpj']),
-        ("Valor Bruto:", dados_p['valor_bruto']),
-        ("Gestor:", dados_p['gestor'])
-    ]
-    for idx, (label, val) in enumerate(info_header, start=2):
+    info_h = [("Processo SEI:", dados_p['processo']), ("Fornecedor:", dados_p['fornecedor']), ("Contrato:", dados_p['contrato']), ("CNPJ:", dados_p['cnpj']), ("Valor Bruto:", dados_p['valor_bruto']), ("Gestor:", dados_p['gestor'])]
+    for idx, (label, val) in enumerate(info_h, start=2):
         ws.cell(row=idx, column=1, value=label).font = bold_f
         ws.cell(row=idx, column=2, value=val)
 
-    cols = ["ITEM", "EVENTO A SER VERIFICADO", "S/N/NA", "OBSERVAÇÕES"]
-    for c_idx, text in enumerate(cols, start=1):
+    for c_idx, text in enumerate(["ITEM", "EVENTO A SER VERIFICADO", "S/N/NA", "OBSERVAÇÕES"], start=1):
         cell = ws.cell(row=9, column=c_idx, value=text)
         cell.font = bold_f; cell.border = border; cell.alignment = center
 
@@ -109,7 +86,7 @@ uploaded_file = st.sidebar.file_uploader("Upload PDF do Processo SEI", type="pdf
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
-    obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_despacho']})"
+    obs_1 = f"{d['empenho']} (Gerando a {d['liquidacao']} de {d['data_proc']})"
     obs_sei = f"Documento SEI {d['sei_verificador']}"
     
     checklist_19 = [
@@ -124,7 +101,7 @@ if uploaded_file:
         {"ITEM": 9, "EVENTO": "Consulta de Sanções (CEIS/CNEP)", "S/N/NA": "S", "OBSERVAÇÕES": "Nada consta"},
         {"ITEM": 10, "EVENTO": "Incidência de tributos retidos na fonte?", "S/N/NA": "S", "OBSERVAÇÕES": "Verificado na NL"},
         {"ITEM": 11, "EVENTO": "Comprovação de não incidência de tributos?", "S/N/NA": "NA", "OBSERVAÇÕES": ""},
-        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "Portaria GAPRE"},
+        {"ITEM": 12, "EVENTO": "Portaria de Nomeação de Fiscalização", "S/N/NA": "S", "OBSERVAÇÕES": "GAPRE"},
         {"ITEM": 13, "EVENTO": "Atestado do Gestor do contrato", "S/N/NA": "S", "OBSERVAÇÕES": obs_sei},
         {"ITEM": 14, "EVENTO": "Relação dos funcionários que executaram o serviço", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
         {"ITEM": 15, "EVENTO": "Comprovante da GFIP / eSocial", "S/N/NA": "S", "OBSERVAÇÕES": "Anexo"},
@@ -146,4 +123,4 @@ if uploaded_file:
         use_container_width=True
     )
 else:
-    st.warning("Submeta o PDF para gerar o checklist com as validades detalhadas.")
+    st.info("Faça o upload do PDF para extrair as validades específicas das certidões.")
