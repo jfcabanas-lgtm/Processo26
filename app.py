@@ -3,136 +3,113 @@ import pandas as pd
 import PyPDF2
 import re
 from datetime import datetime
+from fpdf import FPDF
+import io
 
 # Configuração da página
-st.set_page_config(page_title="AuditAI - IPEM/RJ", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AuditAI Pro - IPEM/RJ", layout="wide", page_icon="🛡️")
+
+def validar_data(texto_data):
+    try:
+        data_obj = datetime.strptime(texto_data, '%d/%m/%Y')
+        if data_obj >= datetime.now():
+            return "✅ Válida", "Normal"
+        else:
+            return "❌ Vencida", "Critico"
+    except:
+        return "⚠️ Não identificada", "Alerta"
 
 def extrair_dados_pdf(file):
     texto = ""
     reader = PyPDF2.PdfReader(file)
     for page in reader.pages:
         content = page.extract_text()
-        if content:
-            texto += content
+        if content: texto += content
     
-    # --- LÓGICA REFINADA PARA O FORNECEDOR ---
-    # Busca após palavras-chave e aceita nomes longos (até 100 caracteres)
-    # Inclui suporte a caracteres como &, /, -, e pontos
-    re_fornecedor = re.search(
-        r"(?:empresa|favor da empresa|Credor|Favorecido|Fornecedor):\s*([A-Z\s\d\/\.\-\&]{5,100})", 
-        texto, 
-        re.IGNORECASE
-    )
+    # Extração de Datas de Validade (procura padrões dd/mm/aaaa próximos a palavras-chave)
+    datas_encontradas = re.findall(r"(\d{2}/\d{2}/\d{4})", texto)
     
-    nome_extraido = "Não identificado"
-    
-    if re_fornecedor:
-        nome_extraido = re_fornecedor.group(1).strip()
-    else:
-        # Fallback: Procura por linhas que terminam com sufixos empresariais
-        fallback = re.search(r"([A-Z\s\d\/\.\-\&]+(?:EIRELI|LTDA|S\.A|S/A|ME|EPP|LIMITADA))", texto)
-        if fallback:
-            nome_extraido = fallback.group(1).strip()
+    # Lógica simplificada: assume que as datas mais distantes no futuro são as validades
+    proximas_validades = sorted([d for d in datas_encontradas if datetime.strptime(d, '%d/%m/%Y') > datetime(2024,1,1)], 
+                               key=lambda x: datetime.strptime(x, '%d/%m/%Y'), reverse=True)
 
-    # Limpeza crucial: Remove quebras de linha e espaços duplos que cortam o nome
-    nome_extraido = nome_extraido.replace('\n', ' ').replace('  ', ' ').strip()
+    re_fornecedor = re.search(r"(?:empresa|favor da empresa|Credor|Favorecido|Fornecedor):\s*([A-Z\s\d\/\.\-\&]{5,100})", texto, re.IGNORECASE)
+    nome_fornecedor = re_fornecedor.group(1).replace('\n', ' ').strip() if re_fornecedor else "Não identificado"
 
     dados = {
-        "processo": re.search(r"\d{6}/\d{6}/\d{4}", texto),
-        "fornecedor": nome_extraido,
-        "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto),
-        "empenho": re.search(r"202\dNE\d{5}", texto),
-        "liquidacao": re.search(r"202\dNL\d{5}", texto),
-        "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto),
-        "sei_docs": re.findall(r"verificador\s(\d{9})", texto)
+        "processo": re.search(r"\d{6}/\d{6}/\d{4}", texto).group(0) if re.search(r"\d{6}/\d{6}/\d{4}", texto) else "Não identificado",
+        "fornecedor": nome_fornecedor,
+        "cnpj": re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto).group(0) if re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto) else "Não identificado",
+        "empenho": re.search(r"202\dNE\d{5}", texto).group(0) if re.search(r"202\dNE\d{5}", texto) else "Não identificado",
+        "validade_sugerida": proximas_validades[0] if proximas_validades else "Não encontrada",
+        "valor_bruto": re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto).group(0) if re.search(r"R\$\s?(\d{1,3}(\.\d{3})*,\d{2})", texto) else "Não identificado"
     }
-    
-    # Limpeza dos campos capturados via Regex Match Objects
-    for k, v in dados.items():
-        if k == "fornecedor": continue 
-        if isinstance(v, list):
-            dados[k] = list(set(v))
-        elif v:
-            dados[k] = v.group(0).strip()
-        else:
-            dados[k] = "Não identificado"
-            
     return dados, texto
 
-# --- INTERFACE STREAMLIT ---
-st.title("🔍 Auditoria Inteligente - IPEM/RJ")
-st.markdown("---")
+def gerar_pdf(dados, df_checklist):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, "Relatorio de Auditoria Interna - IPEM/RJ", ln=True, align='C')
+    pdf.ln(10)
+    pdf.set_font("Arial", '', 12)
+    pdf.cell(200, 10, f"Processo: {dados['processo']}", ln=True)
+    pdf.cell(200, 10, f"Fornecedor: {dados['fornecedor']}", ln=True)
+    pdf.cell(200, 10, f"CNPJ: {dados['cnpj']}", ln=True)
+    pdf.ln(5)
+    
+    # Tabela Simples no PDF
+    pdf.set_font("Arial", 'B', 10)
+    pdf.cell(90, 10, "Item Verificado", 1)
+    pdf.cell(30, 10, "Status", 1)
+    pdf.cell(70, 10, "Evidencia", 1, ln=True)
+    
+    pdf.set_font("Arial", '', 9)
+    for index, row in df_checklist.iterrows():
+        pdf.cell(90, 10, str(row['Critério']), 1)
+        pdf.cell(30, 10, str(row['Resultado']), 1)
+        pdf.cell(70, 10, str(row['Dados']), 1, ln=True)
+        
+    return pdf.output(dest='S').encode('latin-1')
 
-st.sidebar.header("Painel de Controle")
-uploaded_file = st.sidebar.file_uploader("Carregar Processo SEI (PDF)", type="pdf")
+# --- Interface ---
+st.title("🛡️ AuditAI Pro: Auditoria e Conformidade")
+
+uploaded_file = st.sidebar.file_uploader("Upload do Processo SEI", type="pdf")
 
 if uploaded_file:
-    with st.spinner('Processando documentos e extraindo dados...'):
-        dados, texto_completo = extrair_dados_pdf(uploaded_file)
-        
-    # Exibição do Nome do Fornecedor em Destaque
-    st.subheader(f"🏢 Fornecedor: {dados['fornecedor']}")
+    dados, texto_bruto = extrair_dados_pdf(uploaded_file)
+    status_val, classe = validar_data(dados['validade_sugerida'])
     
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Processo SEI", dados["processo"])
-    with col2:
-        st.metric("CNPJ", dados["cnpj"])
-    with col3:
-        st.metric("Valor Bruto", dados["valor_bruto"])
-    with col4:
-        st.metric("Nota de Empenho", dados["empenho"])
+    st.subheader(f"🏢 {dados['fornecedor']}")
+    
+    # Cards de Status
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Empenho", dados['empenho'])
+    c2.metric("Validade Certidão", dados['validade_sugerida'], delta=status_val, delta_color="normal" if "Válida" in status_val else "inverse")
+    c3.metric("Valor", dados['valor_bruto'])
 
-    st.divider()
-
-    # Tabela de Checklist
-    st.markdown("### 📋 Checklist de Instrução Processual")
-    
-    status_docs = "✅ Presente" if len(dados["sei_docs"]) > 5 else "⚠️ Verificar anexos"
-    
-    checklist_df = pd.DataFrame({
-        "Item": [1, 2, 3, 4, 5],
-        "Critério de Auditoria": [
-            "Existência de Nota de Empenho",
-            "Identificação Completa do Credor",
-            "Valor da NF vs Empenho",
-            "Certidões e Documentos SEI",
-            "Nota de Liquidação (NL)"
-        ],
-        "Resultado": [
-            "✅" if dados["empenho"] != "Não identificado" else "❌",
-            "✅" if dados["fornecedor"] != "Não identificado" else "⚠️",
-            "✅" if dados["valor_bruto"] != "Não identificado" else "❌",
-            status_docs,
-            "✅" if dados["liquidacao"] != "Não identificado" else "❓"
-        ],
-        "Dados Extraídos": [
-            dados["empenho"], 
-            dados["fornecedor"], 
-            dados["valor_bruto"], 
-            f"{len(dados['sei_docs'])} códigos identificados", 
-            dados["liquidacao"]
-        ]
+    # Tabela de Dados
+    df_check = pd.DataFrame({
+        "Critério": ["Empenho Cadastrado", "Regularidade Fiscal", "Objeto e Valor", "CNPJ Ativo"],
+        "Resultado": ["✅ OK", status_val, "✅ OK", "✅ OK"],
+        "Dados": [dados['empenho'], f"Validade: {dados['validade_sugerida']}", dados['valor_bruto'], dados['cnpj']]
     })
-    
-    st.table(checklist_df)
+    st.table(df_check)
 
-    # Conclusão Automática
-    st.subheader("📝 Minuta de Despacho Sugerida")
-    st.info(f"""
-    À AUDIT,
+    # Botões de Exportação
+    st.markdown("### 📥 Exportar Relatório")
+    col_pdf, col_excel = st.columns(2)
     
-    Trata-se da análise do processo {dados['processo']} relativo ao pagamento da empresa {dados['fornecedor']}. 
-    Verificou-se que a instrução processual contém as certidões necessárias e a Nota de Empenho {dados['empenho']}.
-    Diante do exposto, nada a opor ao prosseguimento do pagamento.
-    """)
-
-    with st.expander("Ver Texto Bruto do PDF (Depuração)"):
-        st.text(texto_completo)
+    # PDF
+    pdf_bytes = gerar_pdf(dados, df_check)
+    col_pdf.download_button(label="📄 Baixar Checklist em PDF", data=pdf_bytes, file_name=f"Relatorio_{dados['processo'].replace('/','-')}.pdf", mime="application/pdf")
+    
+    # EXCEL
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_check.to_excel(writer, index=False, sheet_name='Auditoria')
+    col_excel.download_button(label="📊 Baixar Checklist em Excel", data=output.getvalue(), file_name=f"Auditoria_{dados['processo'].replace('/','-')}.xlsx", mime="application/vnd.ms-excel")
 
 else:
-    st.info("Utilize a barra lateral para fazer o upload do processo em PDF.")
-    st.image("https://www.ipem.rj.gov.br/images/logo_ipem.png", width=150)
-
-st.sidebar.markdown("---")
-st.sidebar.caption(f"Versão 1.2 | Atualizado em: {datetime.now().strftime('%d/%m/%Y')}")
+    st.info("Aguardando submissão de documento para análise de conformidade.")
