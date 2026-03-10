@@ -16,21 +16,23 @@ def extrair_dados_pdf(file):
         if content:
             paginas_texto.append(content)
     
+    # Texto consolidado para buscas gerais (NE/NL)
     texto_completo = " ".join(paginas_texto)
     texto_limpo = " ".join(texto_completo.split())
 
-    # --- FUNÇÃO DE BUSCA POR CONTEXTO (PÁGINA A PÁGINA) ---
-    def buscar_sei_especifico(termos_chave):
+    # --- FUNÇÃO DE BUSCA INTELIGENTE POR PÁGINA ---
+    def buscar_sei_por_documento(palavras_chave):
+        """Varre as páginas e retorna o SEI da página que contém a palavra-chave"""
         for texto_pagina in paginas_texto:
-            # Verifica se algum dos termos (Ex: 'Nota Fiscal', 'Fatura') está na página
-            if any(termo.lower() in texto_pagina.lower() for termo in termos_chave):
-                # Busca o código verificador nesta página específica
+            # Se encontrar 'Nota Fiscal', 'DANFE' ou 'Fatura' na página...
+            if any(termo.lower() in texto_pagina.lower() for termo in palavras_chave):
+                # ...busca o código verificador específico desta página
                 match = re.search(r"verificador\s+(\d{8,10})", texto_pagina, re.IGNORECASE)
                 if match:
                     return match.group(1)
         return "Não identificado"
 
-    # --- EXTRAÇÃO ITEM 1 (FINANCEIRO) ---
+    # --- EXTRAÇÃO FINANCEIRA (ITEM 1) ---
     id_nl = "Não encontrada"
     id_ne = "Não encontrada"
     match_nl = re.search(r"202\dNL\d{5}", texto_limpo)
@@ -38,30 +40,28 @@ def extrair_dados_pdf(file):
     match_ne = re.search(r"202\dNE\d{5}", texto_limpo)
     if match_ne: id_ne = match_ne.group(0)
 
-    # --- MAPEAMENTO INDIVIDUAL DOS DOCUMENTOS ---
+    # --- MAPEAMENTO DE DOCUMENTOS ---
     return {
         "processo": re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo).group(0) if re.search(r"SEI-\d{6}/\d{6}/\d{4}", texto_completo) else "Não encontrado",
         "empenho": id_ne,
         "liquidacao": id_nl,
-        # Item 2: Nota Fiscal
-        "sei_nf": buscar_sei_especifico(["Nota Fiscal", "DANFE", "Fatura"]),
-        # Item 3: Certidão Federal
-        "sei_federal": buscar_sei_especifico(["Receita Federal", "Créditos Tributários Federais", "Dívida Ativa da União"]),
-        # Item 4: FGTS
-        "sei_fgts": buscar_sei_especifico(["FGTS", "Fundo de Garantia", "CRF"]),
-        # Item 5: Trabalhista
-        "sei_trabalhista": buscar_sei_especifico(["Trabalhista", "CNDT", "Justiça do Trabalho"]),
-        # Item 13: Atesto
-        "sei_atesto": buscar_sei_especifico(["Atesto", "Atestamos", "fatura foi conferida"])
+        # ITEM 2: Busca por Nota Fiscal
+        "sei_nf": buscar_sei_por_documento(["Nota Fiscal", "DANFE", "Fatura", "NFS-e"]),
+        # DEMAIS ITENS: Busca por palavras-chave específicas
+        "sei_federal": buscar_sei_por_documento(["Certidão Negativa", "Créditos Tributários Federais"]),
+        "sei_fgts": buscar_sei_por_documento(["FGTS", "Fundo de Garantia", "CRF"]),
+        "sei_trabalhista": buscar_sei_por_documento(["Trabalhista", "CNDT"]),
+        "sei_atesto": buscar_sei_por_documento(["Atesto", "Atestamos"])
     }
 
 # --- INTERFACE ---
 st.title("🛡️ AuditAI - IPEM/RJ")
-uploaded_file = st.sidebar.file_uploader("Upload do Processo (PDF)", type="pdf")
+uploaded_file = st.sidebar.file_uploader("Submeter PDF do Processo SEI", type="pdf")
 
 if uploaded_file:
     d = extrair_dados_pdf(uploaded_file)
     
+    # Campo Item 1 conforme solicitado (Sem data)
     obs_1 = f"{d['empenho']} - Gerando a {d['liquidacao']}"
     
     checklist = [
@@ -73,5 +73,10 @@ if uploaded_file:
         {"ITEM": 13, "EVENTO": "Atestado do Gestor", "S/N/NA": "S", "OBSERVAÇÕES": f"Documento SEI {d['sei_atesto']}"},
     ]
     
-    st.table(pd.DataFrame(checklist))
-    st.download_button("📥 Baixar Checklist", io.BytesIO().getvalue(), "checklist.xlsx")
+    df = pd.DataFrame(checklist)
+    st.table(df)
+    
+    # Botão de Exportação
+    st.download_button("📥 Gerar Checklist Excel", io.BytesIO().getvalue(), "checklist_audit.xlsx")
+
+
